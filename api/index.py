@@ -2,11 +2,9 @@
 Last30Days Research Intelligence — Full Online API v4
 All sources run on Vercel + Local: Exa + ScrapeCreators (Reddit/TikTok/Instagram/X) + Bluesky + HN + Claude AI
 """
-import os, json, time, asyncio, pathlib
+import os, json, time, asyncio
 from datetime import datetime, timedelta
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
@@ -22,9 +20,6 @@ BSKY_PASS = os.environ.get("BSKY_APP_PASSWORD", "")
 CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
 SC_BASE = "https://api.scrapecreators.com"
-
-# ── Static files for local dev ──
-_public = pathlib.Path(__file__).resolve().parent.parent / "public"
 
 class ResearchRequest(BaseModel):
     topic: str
@@ -498,17 +493,3 @@ async def analyze(req: AnalyzeRequest):
         result = {"status": "error", "error": str(e)}
 
     return {"status": "completed", "topic": req.topic, "analysis_type": req.analysis_type, "results": {"claude": result}}
-
-
-# ═══════════════════════════════════
-#  LOCAL DEV: Serve frontend
-# ═══════════════════════════════════
-@app.get("/")
-async def root():
-    index = _public / "index.html"
-    if index.exists():
-        return FileResponse(str(index))
-    return {"message": "API is running. Frontend not found at " + str(_public)}
-
-if _public.exists():
-    app.mount("/", StaticFiles(directory=str(_public)), name="static")
