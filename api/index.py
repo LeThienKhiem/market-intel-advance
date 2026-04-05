@@ -301,7 +301,7 @@ async def search_hn(query):
 #  ENDPOINTS
 # ═══════════════════════════════════
 
-@app.get("/health")
+@app.get("/api/health")
 async def health():
     return {
         "status": "ok",
@@ -319,7 +319,7 @@ async def health():
     }
 
 
-@app.post("/research")
+@app.post("/api/research")
 async def run_research(req: ResearchRequest):
     t0 = time.time()
 
@@ -379,7 +379,7 @@ async def run_research(req: ResearchRequest):
 #  AI ANALYSIS
 # ═══════════════════════════════════
 
-@app.post("/analyze")
+@app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
     analysis_prompts = {
         "action_plan": (
@@ -517,7 +517,6 @@ async def analyze(req: AnalyzeRequest):
 #  LOCAL DEV: Serve frontend
 # ═══════════════════════════════════
 if not IS_VERCEL:
-    from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
     _public = pathlib.Path(__file__).resolve().parent.parent / "public"
 
@@ -528,5 +527,9 @@ if not IS_VERCEL:
             return FileResponse(str(index))
         return {"message": "API running. Frontend not found."}
 
-    if _public.exists():
-        app.mount("/", StaticFiles(directory=str(_public)), name="static")
+    @app.get("/{filename}")
+    async def static_file(filename: str):
+        fp = _public / filename
+        if fp.exists() and fp.is_file():
+            return FileResponse(str(fp))
+        return {"detail": "Not Found"}
