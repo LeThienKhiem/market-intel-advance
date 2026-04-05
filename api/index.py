@@ -299,7 +299,7 @@ async def search_hn(query):
 #  ENDPOINTS
 # ═══════════════════════════════════
 
-@app.get("/api/health")
+@app.get("/health")
 async def health():
     return {
         "status": "ok",
@@ -317,7 +317,7 @@ async def health():
     }
 
 
-@app.post("/api/research")
+@app.post("/research")
 async def run_research(req: ResearchRequest):
     t0 = time.time()
 
@@ -377,7 +377,7 @@ async def run_research(req: ResearchRequest):
 #  AI ANALYSIS
 # ═══════════════════════════════════
 
-@app.post("/api/analyze")
+@app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
     analysis_prompts = {
         "action_plan": (
