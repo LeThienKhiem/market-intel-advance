@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LAST30DAYS — Research Intelligence by TBP Auto</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&display=swap" rel="stylesheet">
+<style>
+:root{--noir:#0a0a0a;--noir-light:#111;--charcoal:#1a1a1a;--graphite:#2a2a2a;--slate:#3a3a3a;--ash:#6b6b6b;--silver:#999;--pearl:#c8c4bc;--cream:#e8e4dc;--ivory:#f5f2ec;--gold:#c9a96e;--gold-light:#d4b87a;--gold-dim:rgba(201,169,110,.08);--emerald:#6b8f71;--rose:#c4737a;--sapphire:#7a8fb0;--claude:#d4a574;--font-display:'Playfair Display','Cormorant Garamond',Georgia,serif;--font-body:'Cormorant Garamond',Georgia,serif;--font-ui:'Inter',-apple-system,sans-serif;--ease:cubic-bezier(.25,.1,.25,1)}
+*{margin:0;padding:0;box-sizing:border-box}::selection{background:var(--gold);color:var(--noir)}
+html{scroll-behavior:smooth;overflow-x:hidden}
+body{background:var(--noir);color:var(--cream);font-family:var(--font-body);line-height:1.7;min-height:100vh;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:var(--noir)}::-webkit-scrollbar-thumb{background:var(--slate);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:var(--gold)}
+
+/* Nav */
+.nav{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;justify-content:space-between;align-items:center;padding:1.5rem 3rem;transition:all .4s var(--ease)}
+.nav.scrolled{background:rgba(10,10,10,.95);backdrop-filter:blur(20px);border-bottom:1px solid var(--graphite);padding:1rem 3rem}
+.nav-brand{font-family:var(--font-ui);font-size:.7rem;font-weight:600;letter-spacing:.3em;color:var(--ivory)}
+.nav-brand span{color:var(--gold)}
+.nav-right{display:flex;align-items:center;gap:2rem}
+.nav-link{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--silver);cursor:pointer;transition:color .3s;text-decoration:none}
+.nav-link:hover{color:var(--gold)}
+.tbp-badge{font-family:var(--font-ui);font-size:.55rem;font-weight:600;letter-spacing:.2em;text-transform:uppercase;padding:.4rem .8rem;border:1px solid var(--gold);color:var(--gold)}
+
+/* Hero */
+.hero{min-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8rem 2rem 4rem;text-align:center;position:relative}
+.hero-orn{width:40px;height:1px;background:var(--gold);margin:0 auto 2rem}
+.hero h1{font-family:var(--font-display);font-size:3.5rem;font-weight:400;line-height:1.2;color:var(--ivory);margin-bottom:1rem}
+.hero h1 em{font-style:italic;color:var(--gold)}
+.hero-sub{font-family:var(--font-body);font-size:1.1rem;color:var(--silver);max-width:600px;margin:0 auto 3rem;line-height:1.6}
+
+/* Search */
+.search-box{width:100%;max-width:680px;margin:0 auto}
+.search-wrap{display:flex;align-items:center;background:var(--noir-light);border:1px solid var(--graphite);padding:.5rem;transition:border-color .3s}
+.search-wrap:focus-within{border-color:var(--gold)}
+.s-icon{padding:0 1rem;color:var(--ash)}
+.s-input{flex:1;background:none;border:none;outline:none;font-family:var(--font-body);font-size:1.15rem;color:var(--ivory);padding:1rem .5rem}
+.s-input::placeholder{color:var(--ash);font-style:italic}
+.s-btn{font-family:var(--font-ui);font-size:.6rem;font-weight:600;letter-spacing:.15em;text-transform:uppercase;background:var(--gold);color:var(--noir);border:none;padding:1.25rem 2rem;cursor:pointer;transition:all .3s}
+.s-btn:hover{background:var(--gold-light)}
+.search-opts{display:flex;gap:1rem;margin-top:1rem;justify-content:center}
+.opt{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.1em;color:var(--ash);display:flex;align-items:center;gap:.4rem}
+.opt select{background:var(--charcoal);border:1px solid var(--graphite);color:var(--pearl);font-family:var(--font-ui);font-size:.65rem;padding:.3rem .5rem;outline:none}
+.quick-topics{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:center;margin-top:1.5rem}
+.qt{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.08em;padding:.5rem 1rem;background:transparent;border:1px solid var(--graphite);color:var(--ash);cursor:pointer;transition:all .3s}
+.qt:hover{border-color:var(--gold);color:var(--gold)}
+
+/* Loading */
+.loading{display:none;text-align:center;padding:4rem 2rem}
+.loading.on{display:block}
+.spinner{width:40px;height:40px;border:2px solid var(--graphite);border-top-color:var(--gold);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 2rem}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ld-title{font-family:var(--font-display);font-size:1.5rem;color:var(--ivory);margin-bottom:.5rem}
+.ld-source{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--gold);margin-bottom:1.5rem}
+.ld-progress{width:300px;height:2px;background:var(--graphite);margin:0 auto;overflow:hidden}
+.ld-bar{height:100%;background:var(--gold);width:0%;transition:width .5s}
+
+/* Results */
+.results{display:none;max-width:1100px;margin:0 auto;padding:2rem 2rem 4rem}
+.results.on{display:block}
+.res-header{text-align:center;margin-bottom:3rem}
+.res-header .orn{width:30px;height:1px;background:var(--gold);margin:0 auto 1.5rem}
+.res-header h2{font-family:var(--font-display);font-size:2rem;color:var(--ivory);margin-bottom:1rem}
+.res-query{font-family:var(--font-body);font-size:1.1rem;color:var(--gold);font-style:italic;margin-bottom:1rem}
+.res-meta{display:flex;gap:1rem;justify-content:center;flex-wrap:wrap}
+.chip{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.08em;color:var(--ash);display:flex;align-items:center;gap:.4rem}
+.dot{width:6px;height:6px;border-radius:50%}.dot-g{background:var(--emerald)}.dot-gold{background:var(--gold)}.dot-r{background:var(--rose)}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:2rem}
+.stat{background:var(--noir-light);border:1px solid var(--graphite);padding:1.5rem;text-align:center}
+.stat .num{font-family:var(--font-display);font-size:2rem;color:var(--gold);font-weight:600}
+.stat .lbl{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ash);margin-top:.3rem}
+
+/* Sources */
+.sources{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.5rem;justify-content:center}
+.src-pill{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.08em;padding:.4rem .8rem;border-radius:20px;display:flex;align-items:center;gap:.4rem}
+.src-on{background:rgba(107,143,113,.15);color:var(--emerald)}.src-off{background:var(--charcoal);color:var(--ash)}
+.src-dot{width:5px;height:5px;border-radius:50%}.src-on .src-dot{background:var(--emerald)}.src-off .src-dot{background:var(--ash)}
+
+/* Filters */
+.filters{display:flex;gap:.4rem;margin-bottom:2rem;flex-wrap:wrap;justify-content:center}
+.fbtn{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.1em;text-transform:uppercase;padding:.5rem 1rem;background:transparent;border:1px solid var(--graphite);color:var(--ash);cursor:pointer;transition:all .3s}
+.fbtn:hover{border-color:var(--slate);color:var(--pearl)}.fbtn.on{background:var(--gold);border-color:var(--gold);color:var(--noir)}
+
+/* Cards */
+.cards{display:flex;flex-direction:column;gap:1.5rem}
+.card{background:var(--noir-light);border:1px solid var(--graphite);padding:2rem 2.5rem;transition:all .4s var(--ease);position:relative;overflow:hidden}
+.card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;background:var(--gold);opacity:0;transition:opacity .3s}
+.card:hover{border-color:var(--slate);transform:translateY(-2px);box-shadow:0 20px 60px -20px rgba(0,0,0,.5)}
+.card:hover::before{opacity:1}
+.card-top{display:flex;align-items:flex-start;gap:1.5rem;margin-bottom:1rem}
+.card-title{font-family:var(--font-display);font-size:1.15rem;font-weight:500;line-height:1.4;color:var(--ivory);margin-bottom:.4rem;flex:1}
+.card-title a{color:inherit;text-decoration:none;transition:color .3s}
+.card-title a:hover{color:var(--gold)}
+.card-meta{display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem}
+.cm{font-family:var(--font-ui);font-size:.65rem;color:var(--ash);letter-spacing:.04em;display:flex;align-items:center;gap:.25rem}
+.cm-gold{color:var(--gold);font-weight:500}
+.cm-hi{color:var(--emerald)}
+.card-snippet{font-family:var(--font-body);font-size:.95rem;color:var(--silver);line-height:1.6;margin-top:.5rem}
+.card-metrics{display:flex;gap:1.2rem;margin-top:.75rem;flex-wrap:wrap}
+.metric{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.04em;color:var(--ash);display:flex;align-items:center;gap:.3rem}
+.metric .mv{color:var(--pearl);font-weight:500}
+.src-badge{font-family:var(--font-ui);font-size:.5rem;letter-spacing:.1em;text-transform:uppercase;padding:.3rem .6rem;border-radius:2px;flex-shrink:0}
+.src-reddit{background:rgba(255,107,0,.12);color:#ff6b00}
+.src-x{background:rgba(120,120,120,.15);color:#aaa}
+.src-web{background:rgba(122,143,176,.12);color:var(--sapphire)}
+.src-news{background:rgba(201,169,110,.12);color:var(--gold)}
+.src-hn{background:rgba(255,102,0,.12);color:#f60}
+.src-tiktok{background:rgba(0,242,234,.1);color:#00f2ea}
+.src-ig{background:rgba(225,48,108,.12);color:#e1306c}
+.src-bsky{background:rgba(0,133,255,.12);color:#0085ff}
+
+/* AI Section */
+.ai-section{margin-top:3rem;border-top:1px solid var(--graphite);padding-top:3rem}
+.ai-header{text-align:center;margin-bottom:2rem}
+.ai-header h3{font-family:var(--font-display);font-size:1.8rem;color:var(--ivory);margin-bottom:.5rem}
+.ai-header p{font-family:var(--font-body);color:var(--silver);font-style:italic}
+.ai-type-row{display:flex;justify-content:center;gap:.3rem;margin-bottom:2rem;flex-wrap:wrap}
+.ai-type{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.1em;text-transform:uppercase;padding:.55rem 1rem;background:transparent;border:1px solid var(--graphite);color:var(--ash);cursor:pointer;transition:all .3s}
+.ai-type:hover{border-color:var(--slate);color:var(--pearl)}
+.ai-type.on{background:var(--gold);border-color:var(--gold);color:var(--noir)}
+.ai-btn{display:block;margin:0 auto 2rem;font-family:var(--font-ui);font-size:.6rem;font-weight:600;letter-spacing:.15em;text-transform:uppercase;background:var(--gold);color:var(--noir);border:none;padding:1rem 2.5rem;cursor:pointer;transition:all .3s}
+.ai-btn:hover{background:var(--gold-light)}.ai-btn:disabled{opacity:.5;cursor:not-allowed}
+.ai-panel{background:var(--noir-light);border:1px solid var(--graphite);padding:2rem;min-height:200px}
+.ai-panel-head{display:flex;align-items:center;gap:.75rem;margin-bottom:1.5rem;padding-bottom:1rem;border-bottom:1px solid var(--graphite)}
+.ai-logo{width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-family:var(--font-ui);font-size:.65rem;font-weight:700;border-radius:6px}
+.logo-claude{background:rgba(212,165,116,.15);color:var(--claude)}
+.ai-panel-title{font-family:var(--font-ui);font-size:.7rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--claude)}
+.ai-content{font-family:var(--font-ui);font-size:.82rem;line-height:1.8;color:var(--pearl)}
+.ai-content h1,.ai-content h2,.ai-content h3{font-family:var(--font-display);color:var(--ivory);margin:1.5rem 0 .75rem}
+.ai-content h2{font-size:1.2rem}.ai-content h3{font-size:1rem}
+.ai-content ul,.ai-content ol{margin:.75rem 0 .75rem 1.2rem;padding-left:0;list-style-position:outside}
+.ai-content ul{list-style-type:disc}
+.ai-content li{margin:.4rem 0;padding-left:.3rem}
+.ai-content li ul{margin:.3rem 0 .3rem 1.2rem}
+.ai-content p{margin:.5rem 0}
+.ai-content strong{color:var(--ivory)}
+.ai-content code{background:var(--charcoal);padding:.15rem .4rem;font-size:.75rem;color:var(--gold)}
+.ai-loading{text-align:center;padding:3rem;color:var(--ash);font-style:italic}
+
+/* Footer */
+.footer{text-align:center;padding:4rem 2rem;border-top:1px solid var(--graphite)}
+.footer .orn{width:30px;height:1px;background:var(--gold);margin:0 auto 1.5rem}
+.footer p{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;color:var(--ash)}
+
+/* Responsive */
+@media(max-width:768px){
+  .nav{padding:1rem 1.5rem}.hero{padding:5rem 1.5rem 3rem}.hero h1{font-size:2.2rem}
+  .s-btn{padding:1.25rem 1rem}.stats{grid-template-columns:repeat(2,1fr)}.card{padding:1.5rem}
+  .card-top{flex-direction:column;gap:.75rem}.ai-type-row{gap:.2rem}.ai-type{font-size:.5rem;padding:.4rem .6rem}
+}
+@media(max-width:480px){.nav-right{display:none}.stats{grid-template-columns:1fr}.filters{flex-wrap:wrap}}
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <div class="nav-brand">LAST<span>30</span>DAYS</div>
+  <div class="nav-right">
+    <a class="nav-link" onclick="goHome()">Research</a>
+    <a class="nav-link" onclick="document.getElementById('results').scrollIntoView({behavior:'smooth'})">Results</a>
+    <div class="tbp-badge">TBP Auto</div>
+  </div>
+</nav>
+
+<section class="hero" id="hero">
+  <div class="hero-orn"></div>
+  <h1>Research <em>Intelligence</em><br>for TBP Auto</h1>
+  <p class="hero-sub">8-source research: Reddit, X, TikTok, Instagram, Bluesky, Hacker News, News & Web. AI analysis by Claude.</p>
+  <div class="search-box">
+    <div class="search-wrap">
+      <div class="s-icon"><svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div>
+      <input type="text" class="s-input" id="q" placeholder="Enter your research topic..." autocomplete="off">
+      <button class="s-btn" id="goBtn" onclick="doSearch()">Research</button>
+    </div>
+    <div class="search-opts">
+      <label class="opt"><span>DAYS</span><select id="days"><option value="7">7</option><option value="14">14</option><option value="30" selected>30</option><option value="60">60</option></select></label>
+    </div>
+    <div class="quick-topics">
+      <button class="qt" onclick="setQ('commercial vehicle brake drum market')">Brake Drum Market</button>
+      <button class="qt" onclick="setQ('Vietnam auto parts manufacturing export')">Vietnam Manufacturing</button>
+      <button class="qt" onclick="setQ('Freightliner Peterbilt fleet maintenance trends')">Fleet Maintenance</button>
+      <button class="qt" onclick="setQ('electric commercial vehicles braking systems')">EV Braking Systems</button>
+      <button class="qt" onclick="setQ('B2B auto parts marketing strategies')">B2B Auto Parts Marketing</button>
+      <button class="qt" onclick="setQ('aftermarket truck parts sourcing trends')">Aftermarket Trends</button>
+    </div>
+  </div>
+</section>
+
+<div class="loading" id="loading">
+  <div class="spinner"></div>
+  <div class="ld-title" id="ldTitle">Researching...</div>
+  <div class="ld-source" id="ldSrc">INITIALIZING</div>
+  <div class="ld-progress"><div class="ld-bar" id="ldBar"></div></div>
+</div>
+
+<section class="results" id="results">
+  <div class="res-header">
+    <div class="orn"></div>
+    <h2>Research Briefing</h2>
+    <div class="res-query" id="rQuery"></div>
+    <div class="res-meta">
+      <span class="chip"><span class="dot dot-g"></span><span id="rDate"></span></span>
+      <span class="chip"><span class="dot dot-gold"></span><span id="rTime"></span></span>
+      <span class="chip"><span class="dot dot-r"></span>8 Sources</span>
+    </div>
+  </div>
+
+  <div class="stats" id="statsGrid"></div>
+  <div class="sources" id="srcPanel"></div>
+  <div class="filters" id="filterRow"></div>
+  <div class="cards" id="cardsGrid"></div>
+
+  <!-- AI Analysis -->
+  <div class="ai-section" id="aiSection">
+    <div class="ai-header">
+      <h3>AI Strategic Analysis</h3>
+      <p>Claude AI analyzes findings and gives specific actions for TBP Auto</p>
+    </div>
+    <div class="ai-type-row">
+      <button class="ai-type on" data-t="action_plan" onclick="setAI(this)">Action Plan</button>
+      <button class="ai-type" data-t="market_summary" onclick="setAI(this)">Market Summary</button>
+      <button class="ai-type" data-t="competitor_watch" onclick="setAI(this)">Competitor Watch</button>
+      <button class="ai-type" data-t="seo_report" onclick="setAI(this)">SEO</button>
+      <button class="ai-type" data-t="sales_brief" onclick="setAI(this)">Sales</button>
+      <button class="ai-type" data-t="marketing_ideas" onclick="setAI(this)">Marketing</button>
+    </div>
+    <button class="ai-btn" id="aiBtn" onclick="runAI()">Generate AI Analysis</button>
+    <div class="ai-panel">
+      <div class="ai-panel-head">
+        <div class="ai-logo logo-claude">C</div>
+        <div class="ai-panel-title">Claude Sonnet 4</div>
+      </div>
+      <div class="ai-content" id="claudeOut"><div class="ai-loading">Run research first, then generate AI analysis</div></div>
+    </div>
+  </div>
+</section>
+
+<div class="footer"><div class="orn"></div><p>Last30Days Research Intelligence &mdash; TBP Auto Internal Tool</p></div>
+
+<script>
+const API='';
+let allResults=[], researchText='', currentTopic='', aiType='action_plan';
+
+function setQ(t){document.getElementById('q').value=t;document.getElementById('q').focus()}
+function goHome(){window.scrollTo({top:0,behavior:'smooth'})}
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function fmt(n){return n>=1000000?(n/1000000).toFixed(1)+'M':n>=1000?(n/1000).toFixed(1).replace(/\.0$/,'')+'K':String(n)}
+
+function setAI(el){
+  document.querySelectorAll('.ai-type').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on');
+  aiType=el.dataset.t;
+  if(researchText) runAI();
+}
+
+function srcBadgeClass(s){
+  return {web:'src-web',news:'src-news',reddit:'src-reddit',x:'src-x',hackernews:'src-hn',
+    tiktok:'src-tiktok',instagram:'src-ig',bluesky:'src-bsky'}[s]||'src-web';
+}
+function srcLabel(s){
+  return {web:'Web',news:'News',reddit:'Reddit',x:'X/Twitter',hackernews:'Hacker News',
+    tiktok:'TikTok',instagram:'Instagram',bluesky:'Bluesky'}[s]||s;
+}
+
+function buildMetrics(r){
+  const m=[];
+  if(r.points) m.push(`<span class="metric"><span class="mv">${fmt(r.points)}</span> pts</span>`);
+  if(r.comments) m.push(`<span class="metric"><span class="mv">${fmt(r.comments)}</span> comments</span>`);
+  if(r.likes) m.push(`<span class="metric"><span class="mv">${fmt(r.likes)}</span> likes</span>`);
+  if(r.retweets) m.push(`<span class="metric"><span class="mv">${fmt(r.retweets)}</span> RTs</span>`);
+  if(r.reposts) m.push(`<span class="metric"><span class="mv">${fmt(r.reposts)}</span> reposts</span>`);
+  if(r.plays) m.push(`<span class="metric"><span class="mv">${fmt(r.plays)}</span> plays</span>`);
+  if(r.views) m.push(`<span class="metric"><span class="mv">${fmt(r.views)}</span> views</span>`);
+  return m.join('');
+}
+
+function renderCards(list){
+  document.getElementById('cardsGrid').innerHTML = list.map(r=>`
+    <div class="card" data-src="${r.source}">
+      <div class="card-top">
+        <div class="card-title">
+          ${r.url?`<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title||'Untitled')}</a>`:esc(r.title||'Untitled')}
+        </div>
+        <span class="src-badge ${srcBadgeClass(r.source)}">${srcLabel(r.source)}</span>
+      </div>
+      <div class="card-meta">
+        ${r.date?`<span class="cm">${r.date}</span>`:''}
+        ${r.subreddit?`<span class="cm cm-gold">${esc(r.subreddit)}</span>`:''}
+        ${r.handle?`<span class="cm cm-gold">${esc(r.handle)}</span>`:''}
+      </div>
+      ${r.snippet?`<div class="card-snippet">${esc(r.snippet.substring(0,280))}${r.snippet.length>280?'...':''}</div>`:''}
+      <div class="card-metrics">${buildMetrics(r)}</div>
+    </div>
+  `).join('')||'<div style="text-align:center;padding:3rem;color:var(--ash);font-style:italic">No results for this filter</div>';
+}
+
+function filterCards(src){
+  document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('on'));
+  event.target.classList.add('on');
+  renderCards(src==='all'?allResults:allResults.filter(r=>r.source===src));
+}
+
+// ── Loading animation ──
+const srcNames=['Exa Web','News','Reddit','X/Twitter','TikTok','Instagram','Bluesky','Hacker News'];
+let ldInterval;
+function startLoading(){
+  const ld=document.getElementById('loading');ld.classList.add('on');
+  let i=0;
+  ldInterval=setInterval(()=>{
+    document.getElementById('ldSrc').textContent='SCANNING '+srcNames[i%srcNames.length];
+    document.getElementById('ldBar').style.width=Math.min(95,(i+1)/srcNames.length*95)+'%';
+    i++;
+  },600);
+}
+function stopLoading(){
+  clearInterval(ldInterval);
+  document.getElementById('ldBar').style.width='100%';
+  setTimeout(()=>document.getElementById('loading').classList.remove('on'),300);
+}
+
+// ── Main Search ──
+async function doSearch(){
+  const q=document.getElementById('q').value.trim();
+  if(!q){alert('Enter a topic first');return}
+  const days=parseInt(document.getElementById('days').value);
+  currentTopic=q;
+
+  document.getElementById('results').classList.remove('on');
+  startLoading();
+
+  try{
+    const r=await fetch(API+'/api/research',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({topic:q,days:days})});
+    const d=await r.json();
+    stopLoading();
+
+    allResults=d.results||[];
+    researchText=allResults.map(r=>`[${r.source}] ${r.title} | ${r.snippet||''} | ${r.url||''}`).join('\n');
+
+    // Show results
+    const sec=document.getElementById('results');sec.classList.add('on');
+    document.getElementById('rQuery').textContent=`"${q}"`;
+    document.getElementById('rDate').textContent=new Date().toLocaleDateString();
+    document.getElementById('rTime').textContent=d.research_time+'s';
+
+    // Stats grid — dynamic from counts
+    const counts=d.counts||{};
+    const statsHTML=Object.entries(counts).map(([k,v])=>
+      `<div class="stat"><div class="num">${v}</div><div class="lbl">${srcLabel(k)}</div></div>`
+    ).join('');
+    document.getElementById('statsGrid').innerHTML=statsHTML||'<div class="stat"><div class="num">'+d.total+'</div><div class="lbl">Total</div></div>';
+
+    // Sources status
+    const sources=d.sources||{};
+    document.getElementById('srcPanel').innerHTML=Object.entries(sources).map(([name,ok])=>
+      `<span class="src-pill ${ok?'src-on':'src-off'}"><span class="src-dot"></span>${name}</span>`
+    ).join('');
+
+    // Filters
+    const srcTypes=[...new Set(allResults.map(r=>r.source))];
+    document.getElementById('filterRow').innerHTML=
+      `<button class="fbtn on" onclick="filterCards('all')">All (${allResults.length})</button>`+
+      srcTypes.map(s=>`<button class="fbtn" onclick="filterCards('${s}')">${srcLabel(s)} (${allResults.filter(r=>r.source===s).length})</button>`).join('');
+
+    renderCards(allResults);
+    sec.scrollIntoView({behavior:'smooth'});
+
+  }catch(e){
+    stopLoading();
+    alert('Research failed: '+e.message);
+  }
+}
+
+// ── AI Analysis ──
+async function runAI(){
+  if(!researchText){alert('Run a research first!');return}
+  const btn=document.getElementById('aiBtn');
+  btn.disabled=true;btn.textContent='ANALYZING...';
+  document.getElementById('claudeOut').innerHTML='<div class="ai-loading">Claude is thinking...</div>';
+
+  try{
+    const r=await fetch(API+'/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({research_text:researchText.substring(0,15000),topic:currentTopic,analysis_type:aiType})});
+    const d=await r.json();
+    btn.disabled=false;btn.textContent='GENERATE AI ANALYSIS';
+
+    if(d.results?.claude?.status==='ok'){
+      document.getElementById('claudeOut').innerHTML=md(d.results.claude.analysis);
+    }else{
+      document.getElementById('claudeOut').innerHTML=`<div class="ai-loading">Error: ${esc(d.results?.claude?.error||'Unknown error')}</div>`;
+    }
+  }catch(e){
+    btn.disabled=false;btn.textContent='GENERATE AI ANALYSIS';
+    document.getElementById('claudeOut').innerHTML=`<div class="ai-loading">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Markdown renderer ──
+function md(t){
+  if(!t)return'';
+  const lines=t.split('\n');
+  let html='';
+  // listStack tracks nesting: [{tag:'ol'|'ul', indent:0}]
+  let listStack=[];
+
+  function closeListsTo(level){
+    while(listStack.length>level){
+      html+='</li></'+listStack.pop().tag+'>';
+    }
+  }
+  function closeAll(){closeListsTo(0)}
+
+  for(let i=0;i<lines.length;i++){
+    const raw=lines[i].replace(/\r/,'');
+    const trimmed=raw.trimStart();
+    const indent=raw.length-trimmed.length;
+
+    // Headers
+    const hm=trimmed.match(/^(#{1,3}) (.+)$/);
+    if(hm){closeAll();const lv=hm[1].length;html+='<h'+lv+'>'+inline(hm[2])+'</h'+lv+'>';continue}
+
+    // Numbered list: "1. text"
+    const nm=trimmed.match(/^(\d+)\.\s+(.+)$/);
+    if(nm){
+      const depth=indent>=2?1:0;
+      const content=nm[2];
+      if(depth>=listStack.length){
+        // Open new list level
+        if(listStack.length>0)html+=''; // inside parent <li>
+        html+='<ol>';listStack.push({tag:'ol',indent:indent});
+      }else if(depth<listStack.length-1){
+        closeListsTo(depth+1);
+      }else{
+        // Same level — close prev <li>
+        html+='</li>';
+      }
+      html+='<li>'+inline(content);
+      continue;
+    }
+
+    // Bullet list: "- text" or "* text"
+    const bm=trimmed.match(/^[-*]\s+(.+)$/);
+    if(bm){
+      const depth=indent>=2?1:0;
+      const content=bm[1];
+      const targetDepth=depth+( listStack.length>0 && listStack[0].tag==='ol'?1:0);
+      if(listStack.length<=targetDepth){
+        if(listStack.length>0) html+=''; // nested inside <li>
+        html+='<ul>';listStack.push({tag:'ul',indent:indent});
+      }else if(listStack.length>targetDepth+1){
+        closeListsTo(targetDepth+1);
+      }else{
+        html+='</li>';
+      }
+      html+='<li>'+inline(content);
+      continue;
+    }
+
+    // Empty line — peek ahead, only close if next is not a list item
+    if(!trimmed.trim()){
+      const next=(lines[i+1]||'').trimStart();
+      if(!next.match(/^(\d+)\.\s/) && !next.match(/^[-*]\s/)){
+        closeAll();
+      }
+      continue;
+    }
+
+    // Regular text
+    closeAll();
+    html+='<p>'+inline(trimmed)+'</p>';
+  }
+  closeAll();
+  return html;
+}
+function inline(s){
+  let h=esc(s);
+  h=h.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/\*(.+?)\*/g,'<em>$1</em>');
+  h=h.replace(/`(.+?)`/g,'<code>$1</code>');
+  return h;
+}
+
+// ── Init ──
+document.getElementById('q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});
+window.addEventListener('scroll',()=>{document.getElementById('nav').classList.toggle('scrolled',window.scrollY>60)});
+</script>
+</body>
+</html>
