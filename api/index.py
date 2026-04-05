@@ -2,12 +2,14 @@
 Last30Days Research Intelligence — Full Online API v4
 All sources run on Vercel + Local: Exa + ScrapeCreators (Reddit/TikTok/Instagram/X) + Bluesky + HN + Claude AI
 """
-import os, json, time, asyncio
+import os, json, time, asyncio, pathlib
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
+
+IS_VERCEL = bool(os.environ.get("VERCEL"))
 
 app = FastAPI(title="Last30Days Research API", version="4.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -509,3 +511,22 @@ async def analyze(req: AnalyzeRequest):
         result = {"status": "error", "error": str(e)}
 
     return {"status": "completed", "topic": req.topic, "analysis_type": req.analysis_type, "results": {"claude": result}}
+
+
+# ═══════════════════════════════════
+#  LOCAL DEV: Serve frontend
+# ═══════════════════════════════════
+if not IS_VERCEL:
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+    _public = pathlib.Path(__file__).resolve().parent.parent / "public"
+
+    @app.get("/")
+    async def root():
+        index = _public / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return {"message": "API running. Frontend not found."}
+
+    if _public.exists():
+        app.mount("/", StaticFiles(directory=str(_public)), name="static")

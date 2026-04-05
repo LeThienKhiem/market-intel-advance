@@ -344,14 +344,14 @@ async function doSearch(){
     const sec=document.getElementById('results');sec.classList.add('on');
     document.getElementById('rQuery').textContent=`"${q}"`;
     document.getElementById('rDate').textContent=new Date().toLocaleDateString();
-    document.getElementById('rTime').textContent=d.research_time+'s';
+    document.getElementById('rTime').textContent=(d.research_time||0)+'s';
 
     // Stats grid — dynamic from counts
     const counts=d.counts||{};
     const statsHTML=Object.entries(counts).map(([k,v])=>
       `<div class="stat"><div class="num">${v}</div><div class="lbl">${srcLabel(k)}</div></div>`
     ).join('');
-    document.getElementById('statsGrid').innerHTML=statsHTML||'<div class="stat"><div class="num">'+d.total+'</div><div class="lbl">Total</div></div>';
+    document.getElementById('statsGrid').innerHTML=statsHTML||'<div class="stat"><div class="num">'+(d.total||0)+'</div><div class="lbl">Total</div></div>';
 
     // Sources status
     const sources=d.sources||{};
