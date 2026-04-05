@@ -19,7 +19,7 @@ EXA_KEY = os.environ.get("EXA_API_KEY", "")
 SC_KEY = os.environ.get("SCRAPECREATORS_API_KEY", "")
 BSKY_HANDLE = os.environ.get("BSKY_HANDLE", "")
 BSKY_PASS = os.environ.get("BSKY_APP_PASSWORD", "")
-CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 SC_BASE = "https://api.scrapecreators.com"
 
@@ -308,13 +308,13 @@ async def health():
         "sources": {
             "exa": bool(EXA_KEY), "scrapecreators": bool(SC_KEY),
             "bluesky": bool(BSKY_HANDLE and BSKY_PASS), "hackernews": True,
-            "claude": bool(CLAUDE_KEY),
+            "gemini": bool(GEMINI_KEY),
         },
         "keys_loaded": {
             "EXA": EXA_KEY[:8] + "..." if EXA_KEY else "MISSING",
             "SC": SC_KEY[:8] + "..." if SC_KEY else "MISSING",
             "BSKY": BSKY_HANDLE or "MISSING",
-            "CLAUDE": CLAUDE_KEY[:12] + "..." if CLAUDE_KEY else "MISSING",
+            "GEMINI": GEMINI_KEY[:10] + "..." if GEMINI_KEY else "MISSING",
         }
     }
 
@@ -491,26 +491,39 @@ async def analyze(req: AnalyzeRequest):
         "- Mix English and Vietnamese where natural."
     )
 
-    msg = f"Topic: {req.topic}\n\nResearch data:\n{req.research_text[:20000]}\n\nTask:\n{type_prompt}"
+        # Build structured summary for AI
+    lines = req.research_text.strip().split('\n\n')
+    source_counts = {}
+    for line in lines:
+        if line.startswith('['):
+            src = line.split(']')[0].replace('[','').strip()
+            source_counts[src] = source_counts.get(src, 0) + 1
+    summary_header = f"Total results: {len(lines)}\nResults by source: {', '.join(f'{k}: {v}' for k,v in source_counts.items())}\n\n"
 
-    if not CLAUDE_KEY:
+    msg = f"Topic: {req.topic}\n\n{summary_header}Research data:\n{req.research_text[:30000]}\n\nTask:\n{type_prompt}"
+
+    if not GEMINI_KEY:
         return {"status": "completed", "topic": req.topic, "analysis_type": req.analysis_type,
-            "results": {"claude": {"status": "skipped", "reason": "No API key"}}}
+            "results": {"gemini": {"status": "skipped", "reason": "No API key"}}}
     try:
         async with httpx.AsyncClient(timeout=90.0) as c:
-            r = await c.post("https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": "claude-sonnet-4-20250514", "max_tokens": 2048, "system": system,
-                    "messages": [{"role": "user", "content": msg}]})
+            r = await c.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}",
+                headers={"content-type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": f"{system}\n\n{msg}"}]}],
+                    "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1},
+                })
             d = r.json()
-            if "content" in d:
-                result = {"status": "ok", "model": "claude-sonnet-4", "analysis": d["content"][0]["text"]}
+            if "candidates" in d:
+                text = d["candidates"][0]["content"]["parts"][0]["text"]
+                result = {"status": "ok", "model": "gemini-2.5-flash", "analysis": text}
             else:
                 result = {"status": "error", "error": json.dumps(d)}
     except Exception as e:
         result = {"status": "error", "error": str(e)}
 
-    return {"status": "completed", "topic": req.topic, "analysis_type": req.analysis_type, "results": {"claude": result}}
+    return {"status": "completed", "topic": req.topic, "analysis_type": req.analysis_type, "results": {"gemini": result}}
 
 
 # ═══════════════════════════════════
