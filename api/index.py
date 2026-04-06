@@ -1,9 +1,11 @@
 """
-Last30Days Research Intelligence — Full Online API v4
-All sources run on Vercel + Local: Exa + ScrapeCreators (Reddit/TikTok/Instagram/X) + Bluesky + HN + Claude AI
+Last30Days Research Intelligence — Full Online API v5
+Ported from CLI: multi-dimensional scoring, relevance engine, Reddit enrichment,
+cross-source dedup, query type detection, supplemental entity-driven searches.
 """
-import os, json, time, asyncio, pathlib
+import os, json, time, asyncio, pathlib, re, math
 from datetime import datetime, timedelta
+from typing import List, Set, Optional, Dict, Any, Tuple
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +13,7 @@ import httpx
 
 IS_VERCEL = bool(os.environ.get("VERCEL"))
 
-app = FastAPI(title="Last30Days Research API", version="4.0.0")
+app = FastAPI(title="Last30Days Research API", version="5.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ── Keys ──
@@ -23,18 +25,603 @@ GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 SC_BASE = "https://api.scrapecreators.com"
 
+
+# ═══════════════════════════════════════════════════════════
+#  PORTED FROM CLI: Token-overlap relevance scoring (relevance.py)
+# ═══════════════════════════════════════════════════════════
+
+STOPWORDS = frozenset({
+    'the', 'a', 'an', 'to', 'for', 'how', 'is', 'in', 'of', 'on',
+    'and', 'with', 'from', 'by', 'at', 'this', 'that', 'it', 'my',
+    'your', 'i', 'me', 'we', 'you', 'what', 'are', 'do', 'can',
+    'its', 'be', 'or', 'not', 'no', 'so', 'if', 'but', 'about',
+    'all', 'just', 'get', 'has', 'have', 'was', 'will',
+})
+
+SYNONYMS = {
+    'hip': {'rap', 'hiphop'}, 'hop': {'rap', 'hiphop'},
+    'rap': {'hip', 'hop', 'hiphop'}, 'hiphop': {'rap', 'hip', 'hop'},
+    'js': {'javascript'}, 'javascript': {'js'},
+    'ts': {'typescript'}, 'typescript': {'ts'},
+    'ai': {'artificial', 'intelligence'}, 'ml': {'machine', 'learning'},
+    'react': {'reactjs'}, 'reactjs': {'react'},
+    'auto': {'automotive', 'automobile'}, 'automotive': {'auto'},
+    'brake': {'braking'}, 'braking': {'brake'},
+    'drum': {'drums'}, 'drums': {'drum'},
+}
+
+LOW_SIGNAL_QUERY_TOKENS = frozenset({
+    'advice', 'best', 'chance', 'compare', 'comparison', 'explain', 'guide',
+    'how', 'latest', 'news', 'odds', 'opinion', 'prediction', 'review',
+    'thoughts', 'tip', 'tips', 'tutorial', 'update', 'updates', 'use',
+    'using', 'versus', 'vs', 'worth', 'market', 'industry',
+})
+
+
+def tokenize(text: str) -> Set[str]:
+    words = re.sub(r'[^\w\s]', ' ', text.lower()).split()
+    tokens = {w for w in words if w not in STOPWORDS and len(w) > 1}
+    expanded = set(tokens)
+    for t in tokens:
+        if t in SYNONYMS:
+            expanded.update(SYNONYMS[t])
+    return expanded
+
+
+def token_overlap_relevance(query: str, text: str, hashtags: list = None) -> float:
+    """Compute query-centric relevance score 0.0-1.0 (ported from CLI relevance.py)."""
+    q_tokens = tokenize(query)
+    combined = text
+    if hashtags:
+        combined = f"{text} {' '.join(hashtags)}"
+    t_tokens = tokenize(combined)
+
+    if hashtags:
+        for tag in hashtags:
+            tag_lower = tag.lower()
+            for qt in q_tokens:
+                if qt in tag_lower and qt != tag_lower:
+                    t_tokens.add(qt)
+
+    if not q_tokens:
+        return 0.5
+
+    overlap_tokens = q_tokens & t_tokens
+    overlap = len(overlap_tokens)
+    if overlap == 0:
+        return 0.0
+
+    informative_q_tokens = {t for t in q_tokens if t not in LOW_SIGNAL_QUERY_TOKENS}
+    if not informative_q_tokens:
+        informative_q_tokens = q_tokens
+
+    coverage = overlap / len(q_tokens)
+    informative_overlap = len(informative_q_tokens & t_tokens) / len(informative_q_tokens)
+    precision_denominator = min(len(t_tokens), len(q_tokens) + 4) or 1
+    precision = overlap / precision_denominator
+
+    # Phrase bonus
+    phrase_bonus = 0.0
+    nq = ' '.join(re.sub(r'[^\w\s]', ' ', query.lower()).split())
+    nt = ' '.join(re.sub(r'[^\w\s]', ' ', combined.lower()).split())
+    if nq and nq in nt:
+        phrase_bonus = 0.12 if len(nq.split()) > 1 else 0.16
+
+    base = 0.55 * (coverage ** 1.35) + 0.25 * informative_overlap + 0.20 * precision
+
+    # Cap score if only generic tokens matched
+    if informative_q_tokens and not (informative_q_tokens & t_tokens):
+        return round(min(0.24, base), 2)
+
+    return round(min(1.0, base + phrase_bonus), 2)
+
+
+# ═══════════════════════════════════════════════════════════
+#  PORTED FROM CLI: Query type detection (query_type.py)
+# ═══════════════════════════════════════════════════════════
+
+_COMPARISON_PAT = re.compile(r"\b(vs\.?|versus|compared to|comparison|better than|difference between|switch from)\b", re.I)
+_HOWTO_PAT = re.compile(r"\b(how to|tutorial|step by step|setup|install|configure|deploy|implement|build a|create a|best practices|tips)\b", re.I)
+_PRODUCT_PAT = re.compile(r"\b(price|pricing|cost|buy|purchase|deal|discount|subscription|alternative|supplier|wholesale|OEM)\b", re.I)
+_OPINION_PAT = re.compile(r"\b(worth it|thoughts on|opinion|review|experience with|recommend|should i|pros and cons)\b", re.I)
+_PREDICTION_PAT = re.compile(r"\b(predict|forecast|odds|chance|probability|election|outcome|bet on|market for)\b", re.I)
+_CONCEPT_PAT = re.compile(r"\b(what is|what are|explain|definition|how does|overview|introduction|guide to)\b", re.I)
+_BREAKING_PAT = re.compile(r"\b(latest|breaking|announced|launched|released|new|update|news|today|this week)\b", re.I)
+
+WEBSEARCH_PENALTY_BY_TYPE = {
+    "product": 15, "concept": 0, "opinion": 15, "how_to": 5,
+    "comparison": 10, "breaking_news": 10, "prediction": 15,
+}
+
+TIEBREAKER_BY_TYPE = {
+    "product":       {"reddit": 0, "x": 1, "tiktok": 2, "instagram": 3, "hackernews": 4, "bluesky": 5, "web": 6, "news": 7},
+    "concept":       {"hackernews": 0, "reddit": 1, "web": 2, "news": 3, "x": 4, "bluesky": 5, "tiktok": 6, "instagram": 7},
+    "opinion":       {"reddit": 0, "x": 1, "bluesky": 2, "hackernews": 3, "tiktok": 4, "web": 5, "news": 6, "instagram": 7},
+    "how_to":        {"reddit": 0, "hackernews": 1, "web": 2, "x": 3, "tiktok": 4, "news": 5, "instagram": 6, "bluesky": 7},
+    "comparison":    {"reddit": 0, "hackernews": 1, "x": 2, "web": 3, "news": 4, "tiktok": 5, "instagram": 6, "bluesky": 7},
+    "breaking_news": {"x": 0, "reddit": 1, "news": 2, "web": 3, "hackernews": 4, "bluesky": 5, "tiktok": 6, "instagram": 7},
+    "prediction":    {"x": 0, "reddit": 1, "web": 2, "hackernews": 3, "bluesky": 4, "news": 5, "tiktok": 6, "instagram": 7},
+}
+
+DEFAULT_TIEBREAKER = {"reddit": 0, "x": 1, "tiktok": 2, "instagram": 3, "hackernews": 4, "bluesky": 5, "web": 6, "news": 7}
+
+
+def detect_query_type(topic: str) -> str:
+    if _COMPARISON_PAT.search(topic): return "comparison"
+    if _HOWTO_PAT.search(topic): return "how_to"
+    if _PRODUCT_PAT.search(topic): return "product"
+    if _OPINION_PAT.search(topic): return "opinion"
+    if _PREDICTION_PAT.search(topic): return "prediction"
+    if _CONCEPT_PAT.search(topic): return "concept"
+    if _BREAKING_PAT.search(topic): return "breaking_news"
+    return "breaking_news"
+
+
+# ═══════════════════════════════════════════════════════════
+#  PORTED FROM CLI: Multi-dimensional scoring (score.py)
+# ═══════════════════════════════════════════════════════════
+
+WEIGHT_RELEVANCE = 0.45
+WEIGHT_RECENCY = 0.25
+WEIGHT_ENGAGEMENT = 0.30
+
+WEBSEARCH_WEIGHT_RELEVANCE = 0.55
+WEBSEARCH_WEIGHT_RECENCY = 0.45
+WEBSEARCH_SOURCE_PENALTY = 15
+DEFAULT_ENGAGEMENT = 35
+
+
+def log1p_safe(x) -> float:
+    if x is None or x < 0: return 0.0
+    return math.log1p(x)
+
+
+def recency_score(date_str: str, max_days: int = 30) -> int:
+    """Score 0-100 based on how recent the date is."""
+    if not date_str:
+        return 30  # Unknown date gets low-mid score
+    try:
+        d = datetime.strptime(date_str[:10], "%Y-%m-%d")
+        age = (datetime.utcnow() - d).days
+        if age < 0: age = 0
+        if age > max_days: return 0
+        return int(100 * (1 - age / max_days))
+    except:
+        return 30
+
+
+def compute_engagement_raw(item: dict) -> Optional[float]:
+    """Compute raw engagement score based on source type."""
+    source = item.get("source", "")
+
+    if source == "reddit":
+        pts = item.get("points") or 0
+        cmt = item.get("comments") or 0
+        ratio = item.get("upvote_ratio") or 0.5
+        top_cmt = item.get("top_comment_score") or 0
+        if pts == 0 and cmt == 0: return None
+        return 0.50 * log1p_safe(pts) + 0.35 * log1p_safe(cmt) + 0.05 * (ratio * 10) + 0.10 * log1p_safe(top_cmt)
+
+    elif source == "x":
+        likes = item.get("likes") or 0
+        rts = item.get("retweets") or 0
+        replies = item.get("replies") or 0
+        if likes == 0 and rts == 0: return None
+        return 0.55 * log1p_safe(likes) + 0.25 * log1p_safe(rts) + 0.15 * log1p_safe(replies) + 0.05 * 0
+
+    elif source in ("tiktok", "instagram"):
+        views = item.get("views") or item.get("plays") or 0
+        likes = item.get("likes") or 0
+        if views == 0 and likes == 0: return None
+        return 0.50 * log1p_safe(views) + 0.30 * log1p_safe(likes) + 0.20 * log1p_safe(item.get("comments") or 0)
+
+    elif source == "hackernews":
+        pts = item.get("points") or 0
+        cmt = item.get("comments") or 0
+        if pts == 0 and cmt == 0: return None
+        return 0.55 * log1p_safe(pts) + 0.45 * log1p_safe(cmt)
+
+    elif source == "bluesky":
+        likes = item.get("likes") or 0
+        reposts = item.get("reposts") or 0
+        if likes == 0 and reposts == 0: return None
+        return 0.40 * log1p_safe(likes) + 0.30 * log1p_safe(reposts) + 0.20 * 0 + 0.10 * 0
+
+    return None
+
+
+def normalize_to_100(values: list) -> list:
+    valid = [v for v in values if v is not None]
+    if not valid:
+        return [DEFAULT_ENGAGEMENT if v is None else 50 for v in values]
+    min_val, max_val = min(valid), max(valid)
+    range_val = max_val - min_val
+    if range_val == 0:
+        return [None if v is None else 50 for v in values]
+    return [None if v is None else ((v - min_val) / range_val) * 100 for v in values]
+
+
+def score_and_sort_results(results: list, query: str, query_type: str) -> list:
+    """Apply multi-dimensional scoring and sort results (ported from CLI score.py)."""
+    if not results:
+        return results
+
+    # Step 1: Compute relevance for each item
+    for item in results:
+        text = f"{item.get('title', '')} {item.get('snippet', '')}"
+        item["_relevance"] = token_overlap_relevance(query, text)
+
+    # Step 2: Compute raw engagement scores
+    eng_raw = [compute_engagement_raw(item) for item in results]
+    eng_normalized = normalize_to_100(eng_raw)
+
+    # Step 3: Compute overall score per item
+    for i, item in enumerate(results):
+        rel_score = int(item["_relevance"] * 100)
+        rec_score = recency_score(item.get("date", ""))
+
+        if eng_normalized[i] is not None:
+            eng_score = int(eng_normalized[i])
+        else:
+            eng_score = DEFAULT_ENGAGEMENT
+
+        source = item.get("source", "")
+
+        if source in ("web", "news"):
+            # WebSearch: no engagement data, different weights
+            penalty = WEBSEARCH_PENALTY_BY_TYPE.get(query_type, WEBSEARCH_SOURCE_PENALTY)
+            overall = WEBSEARCH_WEIGHT_RELEVANCE * rel_score + WEBSEARCH_WEIGHT_RECENCY * rec_score - penalty
+        else:
+            overall = (WEIGHT_RELEVANCE * rel_score + WEIGHT_RECENCY * rec_score + WEIGHT_ENGAGEMENT * eng_score)
+            if eng_raw[i] is None:
+                overall -= 3  # Unknown engagement penalty
+
+        item["score"] = max(0, min(100, int(overall)))
+        item["_rel_score"] = rel_score
+        item["_rec_score"] = rec_score
+        item["_eng_score"] = eng_score
+
+    # Step 4: Relevance filter — drop items below threshold (keep min 3 per source)
+    by_source = {}
+    for item in results:
+        by_source.setdefault(item["source"], []).append(item)
+
+    filtered = []
+    for source, items in by_source.items():
+        if len(items) <= 3:
+            filtered.extend(items)
+        else:
+            passed = [i for i in items if i["_relevance"] >= 0.3]
+            if not passed:
+                passed = sorted(items, key=lambda x: x["_relevance"], reverse=True)[:3]
+            filtered.extend(passed)
+
+    # Step 5: Sort by score, then date, then source tiebreaker
+    tiebreaker = TIEBREAKER_BY_TYPE.get(query_type, DEFAULT_TIEBREAKER)
+
+    def sort_key(item):
+        return (
+            -item["score"],
+            -int((item.get("date") or "0000-00-00").replace("-", "")),
+            tiebreaker.get(item["source"], 99),
+        )
+
+    filtered.sort(key=sort_key)
+    return filtered
+
+
+# ═══════════════════════════════════════════════════════════
+#  PORTED FROM CLI: Near-duplicate detection (dedupe.py)
+# ═══════════════════════════════════════════════════════════
+
+DEDUP_STOPWORDS = frozenset({
+    'the', 'a', 'an', 'to', 'for', 'how', 'is', 'in', 'of', 'on',
+    'and', 'with', 'from', 'by', 'at', 'this', 'that', 'it', 'show', 'hn',
+})
+
+
+def get_ngrams(text: str, n: int = 3) -> Set[str]:
+    text = re.sub(r'[^\w\s]', ' ', text.lower()).strip()
+    text = re.sub(r'\s+', ' ', text)
+    if len(text) < n:
+        return {text}
+    return {text[i:i+n] for i in range(len(text) - n + 1)}
+
+
+def jaccard_similarity(set1: Set[str], set2: Set[str]) -> float:
+    if not set1 or not set2: return 0.0
+    return len(set1 & set2) / len(set1 | set2)
+
+
+def token_jaccard(text_a: str, text_b: str) -> float:
+    words_a = {w for w in re.sub(r'[^\w\s]', ' ', text_a.lower()).split() if w not in DEDUP_STOPWORDS and len(w) > 1}
+    words_b = {w for w in re.sub(r'[^\w\s]', ' ', text_b.lower()).split() if w not in DEDUP_STOPWORDS and len(w) > 1}
+    if not words_a or not words_b: return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+def hybrid_similarity(text_a: str, text_b: str) -> float:
+    return max(jaccard_similarity(get_ngrams(text_a), get_ngrams(text_b)), token_jaccard(text_a, text_b))
+
+
+def get_item_text(item: dict) -> str:
+    source = item.get("source", "")
+    if source in ("x", "bluesky"):
+        return (item.get("title") or item.get("snippet") or "")[:100]
+    if source in ("tiktok", "instagram"):
+        return (item.get("title") or item.get("snippet") or "")[:100]
+    if source == "hackernews":
+        title = item.get("title", "")
+        if title.startswith("Show HN:"): title = title[8:].strip()
+        elif title.startswith("Ask HN:"): title = title[7:].strip()
+        return title
+    return item.get("title", "")
+
+
+def dedupe_within_source(items: list, threshold: float = 0.7) -> list:
+    """Remove near-duplicates within same source, keeping highest-scored."""
+    if len(items) <= 1:
+        return items
+    ngrams_list = [get_ngrams(get_item_text(item)) for item in items]
+    to_remove = set()
+    for i in range(len(items)):
+        if i in to_remove: continue
+        for j in range(i + 1, len(items)):
+            if j in to_remove: continue
+            if jaccard_similarity(ngrams_list[i], ngrams_list[j]) >= threshold:
+                if items[i].get("score", 0) >= items[j].get("score", 0):
+                    to_remove.add(j)
+                else:
+                    to_remove.add(i)
+    return [item for idx, item in enumerate(items) if idx not in to_remove]
+
+
+def dedupe_all_results(results: list) -> list:
+    """Dedupe within each source, then URL-based cross-source."""
+    # Per-source near-duplicate removal
+    by_source = {}
+    for item in results:
+        by_source.setdefault(item["source"], []).append(item)
+
+    deduped = []
+    for source, items in by_source.items():
+        deduped.extend(dedupe_within_source(items))
+
+    # Cross-source URL dedup
+    seen_urls = set()
+    final = []
+    for item in deduped:
+        url = item.get("url", "")
+        if url and url in seen_urls:
+            continue
+        if url:
+            seen_urls.add(url)
+        final.append(item)
+
+    return final
+
+
+def cross_source_link(results: list, threshold: float = 0.40) -> list:
+    """Annotate items with cross-source references (ported from CLI dedupe.py)."""
+    texts = [get_item_text(item) for item in results]
+    for i in range(len(results)):
+        results[i].setdefault("cross_refs", [])
+        for j in range(i + 1, len(results)):
+            if results[i]["source"] == results[j]["source"]:
+                continue
+            if hybrid_similarity(texts[i], texts[j]) >= threshold:
+                ref_j = f"{results[j]['source']}: {results[j].get('title', '')[:60]}"
+                ref_i = f"{results[i]['source']}: {results[i].get('title', '')[:60]}"
+                if ref_j not in results[i]["cross_refs"]:
+                    results[i]["cross_refs"].append(ref_j)
+                if ref_i not in results[j].setdefault("cross_refs", []):
+                    results[j]["cross_refs"].append(ref_i)
+    return results
+
+
+# ═══════════════════════════════════════════════════════════
+#  PORTED FROM CLI: Reddit comment enrichment (reddit_enrich.py)
+# ═══════════════════════════════════════════════════════════
+
+async def enrich_reddit_comments(items: list, max_items: int = 5, per_timeout: float = 10.0) -> list:
+    """Enrich top Reddit items with comment data via ScrapeCreators."""
+    if not SC_KEY or not items:
+        return items
+
+    headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
+
+    async def fetch_comments(item: dict) -> dict:
+        url = item.get("url", "")
+        if not url:
+            return item
+        try:
+            async with httpx.AsyncClient(timeout=per_timeout) as c:
+                r = await c.get(f"{SC_BASE}/v1/reddit/post/comments",
+                    params={"url": url, "sort": "top"}, headers=headers)
+                data = r.json()
+                comments = data.get("comments") or data.get("data") or []
+
+                top_comments = []
+                insights = []
+                for cmt in comments[:10]:
+                    body = cmt.get("body", "")
+                    if not body or body in ("[deleted]", "[removed]"):
+                        continue
+                    score = cmt.get("ups") or cmt.get("score") or 0
+                    author = cmt.get("author", "[deleted]")
+
+                    top_comments.append({
+                        "score": score,
+                        "author": author,
+                        "excerpt": body[:200],
+                    })
+
+                    # Extract insights: skip low-value comments
+                    if len(body) >= 30:
+                        skip = any(re.match(p, body.lower()) for p in [
+                            r'^(this|same|agreed|exactly|yep|nope|yes|no|thanks)\.?$',
+                            r'^lol|lmao|haha', r'^\[deleted\]', r'^\[removed\]',
+                        ])
+                        if not skip:
+                            insight = body[:150]
+                            if len(body) > 150:
+                                for k, ch in enumerate(insight):
+                                    if ch in '.!?' and k > 50:
+                                        insight = insight[:k+1]
+                                        break
+                                else:
+                                    insight = insight.rstrip() + "..."
+                            insights.append(insight)
+
+                top_comments.sort(key=lambda c: c.get("score", 0), reverse=True)
+                item["top_comments"] = top_comments[:5]
+                item["comment_insights"] = insights[:5]
+                if top_comments:
+                    item["top_comment_score"] = top_comments[0].get("score", 0)
+
+        except:
+            pass
+        return item
+
+    # Enrich top N Reddit items (by points) in parallel
+    reddit_items = sorted(
+        [i for i in items if i.get("source") == "reddit"],
+        key=lambda x: (x.get("points") or 0) + (x.get("comments") or 0),
+        reverse=True
+    )[:max_items]
+
+    if reddit_items:
+        await asyncio.gather(*[fetch_comments(item) for item in reddit_items], return_exceptions=True)
+
+    return items
+
+
+# ═══════════════════════════════════════════════════════════
+#  PORTED FROM CLI: Entity extraction + supplemental search
+# ═══════════════════════════════════════════════════════════
+
+def extract_entities(results: list) -> dict:
+    """Extract handles, hashtags, subreddits from Phase 1 results."""
+    handles = {}    # handle -> count
+    subreddits = {} # subreddit -> count
+
+    GENERIC_HANDLES = frozenset({'elonmusk', 'openai', 'google', 'microsoft', 'apple', 'amazon', 'meta', 'nvidia'})
+
+    for item in results:
+        source = item.get("source", "")
+
+        if source == "x":
+            h = (item.get("handle") or "").lstrip("@").lower()
+            if h and h not in GENERIC_HANDLES:
+                handles[h] = handles.get(h, 0) + 1
+
+        elif source == "reddit":
+            sub = (item.get("subreddit") or "").replace("r/", "").lower()
+            if sub:
+                subreddits[sub] = subreddits.get(sub, 0) + 1
+
+    # Sort by frequency, return top N
+    top_handles = sorted(handles, key=handles.get, reverse=True)[:3]
+    top_subs = sorted(subreddits, key=subreddits.get, reverse=True)[:3]
+
+    return {"x_handles": top_handles, "subreddits": top_subs}
+
+
+async def supplemental_reddit_search(subreddits: list, query: str) -> list:
+    """Phase 2: Targeted search in discovered subreddits."""
+    if not SC_KEY or not subreddits:
+        return []
+
+    headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
+    results = []
+
+    async def search_sub(sub: str):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(f"{SC_BASE}/v1/reddit/search",
+                    params={"query": f"{query} subreddit:{sub}", "sort": "relevance", "timeframe": "month"},
+                    headers=headers)
+                data = r.json()
+                posts = data.get("posts") or data.get("data") or []
+                out = []
+                for p in posts[:5]:
+                    title = p.get("title", "")
+                    text = p.get("selftext") or ""
+                    if not token_overlap_relevance(query, f"{title} {text}") >= 0.3:
+                        continue
+                    pts = p.get("ups") or p.get("score") or 0
+                    cmt = p.get("num_comments") or 0
+                    created = ""
+                    if p.get("created_utc"):
+                        try: created = datetime.utcfromtimestamp(p["created_utc"]).strftime("%Y-%m-%d")
+                        except: pass
+                    out.append({
+                        "source": "reddit", "title": title,
+                        "subreddit": f"r/{sub}",
+                        "url": f"https://reddit.com{p.get('permalink', '')}" if p.get("permalink") else p.get("url", ""),
+                        "date": created, "points": pts, "comments": cmt,
+                        "snippet": text[:250], "_supplemental": True,
+                    })
+                return out
+        except:
+            return []
+
+    tasks = [search_sub(sub) for sub in subreddits]
+    gathered = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in gathered:
+        if isinstance(result, list):
+            results.extend(result)
+    return results
+
+
+async def supplemental_x_search(handles: list, query: str) -> list:
+    """Phase 2: Targeted search for specific X handles."""
+    if not SC_KEY or not handles:
+        return []
+
+    headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
+    results = []
+
+    async def search_handle(handle: str):
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.get(f"{SC_BASE}/v1/twitter/search/tweets",
+                    params={"query": f"from:{handle} {query}", "sort_by": "relevance"},
+                    headers=headers)
+                data = r.json()
+                tweets = data.get("tweets") or data.get("data") or data.get("results") or []
+                out = []
+                for t in tweets[:3]:
+                    text = t.get("full_text") or t.get("text") or ""
+                    likes = t.get("favorite_count") or t.get("likes") or 0
+                    rts = t.get("retweet_count") or t.get("retweets") or 0
+                    tid = t.get("id") or t.get("tweet_id") or t.get("id_str", "")
+                    out.append({
+                        "source": "x", "title": text[:120],
+                        "url": f"https://x.com/{handle}/status/{tid}" if tid else "",
+                        "handle": f"@{handle}",
+                        "likes": likes, "retweets": rts,
+                        "snippet": text[:300], "_supplemental": True,
+                    })
+                return out
+        except:
+            return []
+
+    tasks = [search_handle(h) for h in handles]
+    gathered = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in gathered:
+        if isinstance(result, list):
+            results.extend(result)
+    return results
+
+
+# ═══════════════════════════════════════════════════════════
+#  SOURCE SEARCH FUNCTIONS (same APIs, now with relevance scoring)
+# ═══════════════════════════════════════════════════════════
+
 class ResearchRequest(BaseModel):
     topic: str
     days: int = 30
-
-def is_relevant(text, query, min_match=2):
-    """Check if text contains at least min_match words from the query."""
-    if not text or not query:
-        return False
-    words = [w.lower() for w in query.split() if len(w) > 2]
-    text_lower = text.lower()
-    matched = sum(1 for w in words if w in text_lower)
-    return matched >= min(min_match, len(words))
 
 class AnalyzeRequest(BaseModel):
     research_text: str
@@ -42,9 +629,6 @@ class AnalyzeRequest(BaseModel):
     analysis_type: str = "action_plan"
 
 
-# ═══════════════════════════════════
-#  SOURCE: Exa Web Search
-# ═══════════════════════════════════
 async def search_exa(query, days, num=12, domains=None, label="web"):
     if not EXA_KEY:
         return []
@@ -75,14 +659,11 @@ async def search_exa(query, days, num=12, domains=None, label="web"):
         return []
 
 
-# ═══════════════════════════════════
-#  SOURCE: Reddit (ScrapeCreators)
-# ═══════════════════════════════════
 async def search_reddit(query, days):
     if not SC_KEY:
         return []
     try:
-        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/4.0"}
+        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
         async with httpx.AsyncClient(timeout=20.0) as c:
             r = await c.get(f"{SC_BASE}/v1/reddit/search",
                 params={"query": query, "sort": "relevance", "timeframe": "month"}, headers=headers)
@@ -92,23 +673,23 @@ async def search_reddit(query, days):
             for p in posts[:30]:
                 title = p.get("title", "")
                 text = p.get("selftext") or ""
-                # Skip irrelevant results
-                if not is_relevant(title + " " + text, query):
+                rel = token_overlap_relevance(query, f"{title} {text}")
+                if rel < 0.25:
                     continue
                 pts = p.get("ups") or p.get("score") or 0
                 cmt = p.get("num_comments") or 0
+                ratio = p.get("upvote_ratio") or 0.5
                 sub = p.get("subreddit", "")
                 created = ""
                 if p.get("created_utc"):
-                    try:
-                        created = datetime.utcfromtimestamp(p["created_utc"]).strftime("%Y-%m-%d")
-                    except:
-                        pass
+                    try: created = datetime.utcfromtimestamp(p["created_utc"]).strftime("%Y-%m-%d")
+                    except: pass
                 out.append({
                     "source": "reddit", "title": title,
                     "subreddit": f"r/{sub}" if sub else "",
                     "url": f"https://reddit.com{p.get('permalink', '')}" if p.get("permalink") else p.get("url", ""),
                     "date": created, "points": pts, "comments": cmt,
+                    "upvote_ratio": ratio,
                     "snippet": text[:250],
                 })
                 if len(out) >= 15:
@@ -118,14 +699,11 @@ async def search_reddit(query, days):
         return []
 
 
-# ═══════════════════════════════════
-#  SOURCE: X/Twitter (ScrapeCreators)
-# ═══════════════════════════════════
 async def search_x(query, days):
     if not SC_KEY:
         return []
     try:
-        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/4.0"}
+        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
         async with httpx.AsyncClient(timeout=20.0) as c:
             r = await c.get(f"{SC_BASE}/v1/twitter/search/tweets",
                 params={"query": query, "sort_by": "relevance"}, headers=headers)
@@ -133,19 +711,21 @@ async def search_x(query, days):
             tweets = data.get("tweets") or data.get("data") or data.get("results") or []
             out = []
             for t in tweets[:30]:
+                text = t.get("full_text") or t.get("text") or ""
+                rel = token_overlap_relevance(query, text)
+                if rel < 0.25:
+                    continue
                 likes = t.get("favorite_count") or t.get("likes") or 0
                 rts = t.get("retweet_count") or t.get("retweets") or 0
+                replies = t.get("reply_count") or 0
                 user = t.get("user") or t.get("author") or {}
                 handle = user.get("screen_name") or user.get("username") or ""
-                text = t.get("full_text") or t.get("text") or ""
-                if not is_relevant(text, query):
-                    continue
                 tid = t.get("id") or t.get("tweet_id") or t.get("id_str", "")
                 out.append({
                     "source": "x", "title": text[:120],
                     "url": f"https://x.com/{handle}/status/{tid}" if handle and tid else "",
                     "handle": f"@{handle}" if handle else "",
-                    "likes": likes, "retweets": rts,
+                    "likes": likes, "retweets": rts, "replies": replies,
                     "snippet": text[:300],
                 })
                 if len(out) >= 15:
@@ -155,14 +735,11 @@ async def search_x(query, days):
         return []
 
 
-# ═══════════════════════════════════
-#  SOURCE: TikTok (ScrapeCreators)
-# ═══════════════════════════════════
 async def search_tiktok(query, days):
     if not SC_KEY:
         return []
     try:
-        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/4.0"}
+        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
         async with httpx.AsyncClient(timeout=20.0) as c:
             r = await c.get(f"{SC_BASE}/v1/tiktok/search/keyword",
                 params={"query": query, "sort_by": "relevance"}, headers=headers)
@@ -172,17 +749,22 @@ async def search_tiktok(query, days):
             for v in items[:20]:
                 info = v.get("aweme_info") or v
                 desc = (info.get("desc") or "").strip()
-                if not desc or not is_relevant(desc, query):
+                if not desc:
+                    continue
+                hashtags = re.findall(r'#(\w+)', desc)
+                rel = token_overlap_relevance(query, desc, hashtags=hashtags)
+                if rel < 0.25:
                     continue
                 stats = info.get("statistics") or {}
                 plays = stats.get("play_count") or 0
                 likes = stats.get("digg_count") or 0
+                comments = stats.get("comment_count") or 0
                 author = info.get("author") or {}
                 out.append({
                     "source": "tiktok", "title": desc[:120],
                     "url": info.get("share_url") or "",
                     "handle": f"@{author.get('unique_id', '')}" if author.get("unique_id") else "",
-                    "plays": plays, "likes": likes,
+                    "plays": plays, "likes": likes, "comments": comments,
                     "snippet": desc[:250],
                 })
                 if len(out) >= 10:
@@ -192,14 +774,11 @@ async def search_tiktok(query, days):
         return []
 
 
-# ═══════════════════════════════════
-#  SOURCE: Instagram (ScrapeCreators)
-# ═══════════════════════════════════
 async def search_instagram(query, days):
     if not SC_KEY:
         return []
     try:
-        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/4.0"}
+        headers = {"x-api-key": SC_KEY, "Content-Type": "application/json", "User-Agent": "last30days/5.0"}
         async with httpx.AsyncClient(timeout=20.0) as c:
             r = await c.get(f"{SC_BASE}/v2/instagram/reels/search",
                 params={"query": query}, headers=headers)
@@ -209,18 +788,22 @@ async def search_instagram(query, days):
             for reel in reels[:20]:
                 views = reel.get("video_play_count") or reel.get("video_view_count") or 0
                 likes = reel.get("like_count") or 0
+                comments = reel.get("comment_count") or 0
                 owner = reel.get("owner") or {}
                 caption = reel.get("caption")
                 text = (caption.get("text", "") if isinstance(caption, dict) else (caption or "")).strip()
-                # Skip empty or irrelevant results
-                if not text or not is_relevant(text, query):
+                if not text:
+                    continue
+                hashtags = re.findall(r'#(\w+)', text)
+                rel = token_overlap_relevance(query, text, hashtags=hashtags)
+                if rel < 0.25:
                     continue
                 code = reel.get("shortcode") or reel.get("code") or ""
                 out.append({
                     "source": "instagram", "title": text[:120],
                     "url": f"https://instagram.com/reel/{code}" if code else "",
                     "handle": f"@{owner.get('username', '')}" if owner.get("username") else "",
-                    "views": views, "likes": likes,
+                    "views": views, "likes": likes, "comments": comments,
                     "snippet": text[:250],
                 })
                 if len(out) >= 10:
@@ -230,9 +813,6 @@ async def search_instagram(query, days):
         return []
 
 
-# ═══════════════════════════════════
-#  SOURCE: Bluesky (AT Protocol)
-# ═══════════════════════════════════
 async def search_bluesky(query, days):
     if not BSKY_HANDLE or not BSKY_PASS:
         return []
@@ -251,7 +831,10 @@ async def search_bluesky(query, days):
             for p in posts[:25]:
                 rec = p.get("record", {})
                 text = rec.get("text", "").strip()
-                if not text or not is_relevant(text, query):
+                if not text:
+                    continue
+                rel = token_overlap_relevance(query, text)
+                if rel < 0.25:
                     continue
                 author = p.get("author", {})
                 handle = author.get("handle", "")
@@ -274,9 +857,6 @@ async def search_bluesky(query, days):
         return []
 
 
-# ═══════════════════════════════════
-#  SOURCE: Hacker News (Algolia)
-# ═══════════════════════════════════
 async def search_hn(query):
     try:
         async with httpx.AsyncClient(timeout=10.0) as c:
@@ -297,14 +877,16 @@ async def search_hn(query):
         return []
 
 
-# ═══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  ENDPOINTS
-# ═══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 
 @app.get("/api/health")
 async def health():
     return {
-        "status": "ok",
+        "status": "ok", "version": "5.0.0",
+        "features": ["relevance_scoring", "multi_dim_scoring", "reddit_enrichment",
+                      "cross_source_dedup", "supplemental_search", "query_type_detection"],
         "sources": {
             "exa": bool(EXA_KEY), "scrapecreators": bool(SC_KEY),
             "bluesky": bool(BSKY_HANDLE and BSKY_PASS), "hackernews": True,
@@ -323,6 +905,10 @@ async def health():
 async def run_research(req: ResearchRequest):
     t0 = time.time()
 
+    # Detect query type for scoring adjustments
+    query_type = detect_query_type(req.topic)
+
+    # ── Phase 1: Parallel broad search across all sources ──
     tasks = await asyncio.gather(
         search_exa(req.topic, req.days, 12, label="web"),
         search_exa(req.topic, req.days, 8,
@@ -338,21 +924,41 @@ async def run_research(req: ResearchRequest):
     )
 
     labels = ["web", "news", "reddit", "x", "tiktok", "instagram", "bluesky", "hackernews"]
-    results_by_source = {}
-    for label, result in zip(labels, tasks):
-        results_by_source[label] = result if isinstance(result, list) else []
-
-    # Dedupe by URL
-    seen = set()
     all_results = []
-    for label in labels:
-        for item in results_by_source.get(label, []):
-            url = item.get("url", "")
-            if url and url not in seen:
-                seen.add(url)
-                all_results.append(item)
-            elif not url:
-                all_results.append(item)
+    for label, result in zip(labels, tasks):
+        if isinstance(result, list):
+            all_results.extend(result)
+
+    # ── Phase 2: Supplemental entity-driven searches ──
+    entities = extract_entities(all_results)
+    existing_urls = {r.get("url", "") for r in all_results if r.get("url")}
+
+    supp_reddit, supp_x = [], []
+    if entities["subreddits"] or entities["x_handles"]:
+        supp_tasks = await asyncio.gather(
+            supplemental_reddit_search(entities["subreddits"], req.topic),
+            supplemental_x_search(entities["x_handles"], req.topic),
+            return_exceptions=True,
+        )
+        if isinstance(supp_tasks[0], list):
+            supp_reddit = [r for r in supp_tasks[0] if r.get("url") not in existing_urls]
+        if isinstance(supp_tasks[1], list):
+            supp_x = [r for r in supp_tasks[1] if r.get("url") not in existing_urls]
+
+    all_results.extend(supp_reddit)
+    all_results.extend(supp_x)
+
+    # ── Reddit comment enrichment ──
+    all_results = await enrich_reddit_comments(all_results, max_items=5)
+
+    # ── Deduplication (near-duplicate + URL) ──
+    all_results = dedupe_all_results(all_results)
+
+    # ── Multi-dimensional scoring & sorting ──
+    all_results = score_and_sort_results(all_results, req.topic, query_type)
+
+    # ── Cross-source linking ──
+    all_results = cross_source_link(all_results)
 
     elapsed = round(time.time() - t0, 1)
     counts = {}
@@ -366,18 +972,26 @@ async def run_research(req: ResearchRequest):
         "tiktok": "TikTok", "instagram": "Instagram", "bluesky": "Bluesky", "hackernews": "Hacker News"
     }
     for label in labels:
-        sources_status[nice.get(label, label)] = len(results_by_source.get(label, [])) > 0
+        sources_status[nice.get(label, label)] = counts.get(label, 0) > 0
+
+    # Clean internal fields before returning
+    for r in all_results:
+        for key in ("_relevance", "_rel_score", "_rec_score", "_eng_score", "_supplemental"):
+            r.pop(key, None)
 
     return {
         "status": "completed", "topic": req.topic, "research_time": elapsed,
-        "days": req.days, "counts": counts, "total": len(all_results),
-        "sources": sources_status, "results": all_results[:50]
+        "days": req.days, "query_type": query_type, "counts": counts,
+        "total": len(all_results),
+        "supplemental": {"reddit_subs": entities["subreddits"], "x_handles": entities["x_handles"],
+                         "extra_reddit": len(supp_reddit), "extra_x": len(supp_x)},
+        "sources": sources_status, "results": all_results[:60]
     }
 
 
-# ═══════════════════════════════════
-#  AI ANALYSIS
-# ═══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
+#  AI ANALYSIS (Gemini 2.5 Flash)
+# ═══════════════════════════════════════════════════════════
 
 @app.post("/api/analyze")
 async def analyze(req: AnalyzeRequest):
@@ -561,7 +1175,7 @@ async def analyze(req: AnalyzeRequest):
         "- Mix English and Vietnamese where natural."
     )
 
-        # Build structured summary for AI
+    # Build structured summary for AI
     lines = req.research_text.strip().split('\n\n')
     source_counts = {}
     for line in lines:
@@ -596,9 +1210,9 @@ async def analyze(req: AnalyzeRequest):
     return {"status": "completed", "topic": req.topic, "analysis_type": req.analysis_type, "results": {"gemini": result}}
 
 
-# ═══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  LOCAL DEV: Serve frontend
-# ═══════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 if not IS_VERCEL:
     from fastapi.responses import FileResponse
     _public = pathlib.Path(__file__).resolve().parent.parent / "public"

@@ -101,6 +101,15 @@ body{background:var(--noir);color:var(--cream);font-family:var(--font-body);line
 .cm-hi{color:var(--emerald)}
 .card-snippet{font-family:var(--font-body);font-size:.95rem;color:var(--silver);line-height:1.6;margin-top:.5rem}
 .card-metrics{display:flex;gap:1.2rem;margin-top:.75rem;flex-wrap:wrap}
+.score-badge .mv{color:var(--gold);font-weight:600}
+.card-comments{margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--graphite)}
+.comment-label{font-family:var(--font-ui);font-size:.55rem;letter-spacing:.1em;text-transform:uppercase;color:var(--gold);margin-bottom:.4rem}
+.comment-item{font-size:.85rem;color:var(--pearl);margin-bottom:.3rem;line-height:1.5}
+.comment-score{font-family:var(--font-ui);font-size:.7rem;color:var(--gold);font-weight:600;margin-right:.3rem}
+.comment-text{color:var(--silver)}
+.card-insights{margin-top:.5rem}
+.insight-item{font-size:.85rem;color:var(--silver);font-style:italic;margin-bottom:.2rem;line-height:1.5}
+.card-xref{margin-top:.5rem;font-family:var(--font-ui);font-size:.65rem;color:var(--ash);letter-spacing:.03em;padding:.4rem .6rem;background:var(--gold-dim);border-left:2px solid var(--gold)}
 .metric{font-family:var(--font-ui);font-size:.6rem;letter-spacing:.04em;color:var(--ash);display:flex;align-items:center;gap:.3rem}
 .metric .mv{color:var(--pearl);font-weight:500}
 .src-badge{font-family:var(--font-ui);font-size:.5rem;letter-spacing:.1em;text-transform:uppercase;padding:.3rem .6rem;border-radius:2px;flex-shrink:0}
@@ -270,6 +279,7 @@ function srcLabel(s){
 
 function buildMetrics(r){
   const m=[];
+  if(r.score) m.push(`<span class="metric score-badge"><span class="mv">${r.score}</span> score</span>`);
   if(r.points) m.push(`<span class="metric"><span class="mv">${fmt(r.points)}</span> pts</span>`);
   if(r.comments) m.push(`<span class="metric"><span class="mv">${fmt(r.comments)}</span> comments</span>`);
   if(r.likes) m.push(`<span class="metric"><span class="mv">${fmt(r.likes)}</span> likes</span>`);
@@ -278,6 +288,30 @@ function buildMetrics(r){
   if(r.plays) m.push(`<span class="metric"><span class="mv">${fmt(r.plays)}</span> plays</span>`);
   if(r.views) m.push(`<span class="metric"><span class="mv">${fmt(r.views)}</span> views</span>`);
   return m.join('');
+}
+function buildEnrichment(r){
+  let html='';
+  // Top comments from Reddit enrichment
+  if(r.top_comments && r.top_comments.length>0){
+    html+='<div class="card-comments"><div class="comment-label">Top Comments</div>';
+    r.top_comments.slice(0,3).forEach(c=>{
+      html+=`<div class="comment-item"><span class="comment-score">${fmt(c.score)} pts</span> <span class="comment-text">${esc(c.excerpt||'').substring(0,150)}</span></div>`;
+    });
+    html+='</div>';
+  }
+  // Comment insights
+  if(r.comment_insights && r.comment_insights.length>0){
+    html+='<div class="card-insights"><div class="comment-label">Insights</div>';
+    r.comment_insights.slice(0,2).forEach(ins=>{
+      html+=`<div class="insight-item">"${esc(ins.substring(0,120))}"</div>`;
+    });
+    html+='</div>';
+  }
+  // Cross-source references
+  if(r.cross_refs && r.cross_refs.length>0){
+    html+=`<div class="card-xref">Also discussed on: ${r.cross_refs.map(x=>esc(x)).join(' · ')}</div>`;
+  }
+  return html;
 }
 
 function renderCards(list){
@@ -296,6 +330,7 @@ function renderCards(list){
       </div>
       ${r.snippet?`<div class="card-snippet">${esc(r.snippet.substring(0,280))}${r.snippet.length>280?'...':''}</div>`:''}
       <div class="card-metrics">${buildMetrics(r)}</div>
+      ${buildEnrichment(r)}
     </div>
   `).join('')||'<div style="text-align:center;padding:3rem;color:var(--ash);font-style:italic">No results for this filter</div>';
 }
@@ -347,6 +382,7 @@ async function doSearch(){
       if(r.subreddit) line+=` | ${r.subreddit}`;
       if(r.handle) line+=` | ${r.handle}`;
       if(r.date) line+=` | Date: ${r.date}`;
+      if(r.score) line+=` | Score: ${r.score}/100`;
       if(r.points) line+=` | ${r.points} points`;
       if(r.comments) line+=` | ${r.comments} comments`;
       if(r.likes) line+=` | ${r.likes} likes`;
@@ -355,6 +391,16 @@ async function doSearch(){
       if(r.plays) line+=` | ${r.plays} plays`;
       if(r.views) line+=` | ${r.views} views`;
       if(r.snippet) line+=`\n  Snippet: ${r.snippet}`;
+      // Include enrichment data for AI
+      if(r.top_comments && r.top_comments.length>0){
+        line+=`\n  Top comments: ${r.top_comments.slice(0,3).map(c=>`[${c.score}pts] ${(c.excerpt||'').substring(0,100)}`).join(' | ')}`;
+      }
+      if(r.comment_insights && r.comment_insights.length>0){
+        line+=`\n  Insights: ${r.comment_insights.slice(0,3).join(' | ')}`;
+      }
+      if(r.cross_refs && r.cross_refs.length>0){
+        line+=`\n  Also on: ${r.cross_refs.join(', ')}`;
+      }
       return line;
     }).join('\n\n');
 
